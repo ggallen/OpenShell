@@ -30,9 +30,27 @@ endpoints:
     access: read-only
     enforcement: enforce
   # github.com is the git transport (clone / fetch by default).
+  # Explicit rules instead of `access: read-only` so that POST to
+  # git-upload-pack (clone/fetch) is allowed while git-receive-pack
+  # (push) stays blocked.
   - host: github.com
     port: 443
     protocol: rest
-    access: read-only
     enforcement: enforce
+    rules:
+      - allow:
+          method: GET
+          path: "**"
+      - allow:
+          method: HEAD
+          path: "**"
+      - allow:
+          method: OPTIONS
+          path: "**"
+      - allow:
+          method: POST
+          path: "**/git-upload-pack"
+      - allow:
+          method: POST
+          path: "**/info/refs"
 binaries: [/usr/bin/gh, /usr/local/bin/gh, /usr/bin/git, /usr/local/bin/git]

@@ -1672,12 +1672,29 @@ mod tests {
             }),
             "github profile should include read-only GraphQL endpoint"
         );
+        // api.github.com endpoints use access: read-only.
+        // github.com uses explicit rules (no access preset) to allow
+        // POST git-upload-pack for clone/fetch while blocking push.
         assert!(
             proto
                 .endpoints
                 .iter()
+                .filter(|endpoint| endpoint.host == "api.github.com")
                 .all(|endpoint| endpoint.access == "read-only"),
-            "github profile endpoints should all be read-only"
+            "api.github.com endpoints should be read-only"
+        );
+        let git_endpoint = proto
+            .endpoints
+            .iter()
+            .find(|endpoint| endpoint.host == "github.com")
+            .expect("github.com endpoint");
+        assert!(
+            git_endpoint.access.is_empty(),
+            "github.com should use explicit rules, not an access preset"
+        );
+        assert!(
+            !git_endpoint.rules.is_empty(),
+            "github.com should have explicit L7 rules"
         );
         assert_eq!(proto.binaries.len(), 4);
     }
