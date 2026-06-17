@@ -9,8 +9,8 @@ use miette::{IntoDiagnostic, Result, WrapErr};
 use nix::sys::signal::{SaFlags, SigAction, SigHandler, SigSet, Signal, sigaction};
 use openshell_core::ObjectId;
 use openshell_core::forward::{
-    build_proxy_command, find_ssh_forward_pid, format_gateway_url, resolve_ssh_gateway,
-    shell_escape, validate_ssh_session_response, write_forward_pid,
+    build_proxy_command, find_ssh_forward_pid, format_gateway_url, kill_process, probe_listener,
+    resolve_ssh_gateway, shell_escape, validate_ssh_session_response, write_forward_pid,
 };
 use openshell_core::proto::{
     CreateSshSessionRequest, GetSandboxRequest, SshRelayTarget, TcpForwardFrame, TcpForwardInit,
@@ -369,15 +369,29 @@ pub async fn sandbox_forward(
 
     if background {
         // SSH has forked — find its PID and record it.
-        if let Some(pid) = find_ssh_forward_pid(&session.sandbox_id, port) {
-            write_forward_pid(name, port, pid, &session.sandbox_id, &spec.bind_addr)?;
-        } else {
-            eprintln!(
-                "{} Could not discover backgrounded SSH process; \
-                 forward may be running but is not tracked",
-                "!".yellow(),
-            );
+        let pid = find_ssh_forward_pid(&session.sandbox_id, port);
+
+        if pid.is_none() {
+            return Err(miette::miette!(
+                "Could not discover backgrounded SSH process for port {port}; \
+                 the forward is not tracked and may not be running"
+            ));
         }
+
+        let pid = pid.unwrap();
+
+        // Probe the local listener to confirm the tunnel is actually serving.
+        if !probe_listener(&spec.bind_addr, port) {
+            // Listener never came up — kill the orphaned SSH process and fail.
+            kill_process(pid);
+            return Err(miette::miette!(
+                "SSH process (pid {pid}) started but the local listener on \
+                 {}:{port} is not reachable; killed the background process",
+                spec.bind_addr,
+            ));
+        }
+
+        write_forward_pid(name, port, pid, &session.sandbox_id, &spec.bind_addr)?;
     }
 
     Ok(())

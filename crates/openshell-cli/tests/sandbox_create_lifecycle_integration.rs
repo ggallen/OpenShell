@@ -1307,7 +1307,11 @@ async fn sandbox_create_keeps_sandbox_with_forwarding() {
     let forward_port = listener.local_addr().unwrap().port();
     drop(listener);
 
-    run::sandbox_create(
+    // The fake SSH binary exits immediately without creating a background
+    // process or local listener, so the forward correctly fails closed.
+    // The sandbox is still kept (not deleted) because --forward implies
+    // persistence regardless of the forward outcome.
+    let _err = run::sandbox_create(
         &server.endpoint,
         Some("persistent-forward"),
         None,
@@ -1331,7 +1335,7 @@ async fn sandbox_create_keeps_sandbox_with_forwarding() {
         &tls,
     )
     .await
-    .expect("sandbox create with forward should succeed");
+    .expect_err("sandbox create with forward should fail when listener is unreachable");
 
     assert!(deleted_names(&server).await.is_empty());
 }
@@ -1428,5 +1432,32 @@ async fn sandbox_create_env_rejects_invalid_key_name() {
     assert!(
         msg.contains("BAD-NAME"),
         "error should mention invalid key, got: {msg}"
+    );
+}
+
+#[tokio::test]
+async fn sandbox_forward_background_fails_when_ssh_process_untracked_and_listener_missing() {
+    let server = run_server().await;
+    let fake_ssh_dir = tempfile::tempdir().unwrap();
+    let xdg_dir = tempfile::tempdir().unwrap();
+    let _env = test_env(&fake_ssh_dir, &xdg_dir);
+    let tls = test_tls(&server);
+    install_fake_ssh(&fake_ssh_dir);
+
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    drop(listener);
+    let spec = openshell_core::forward::ForwardSpec::new(port);
+
+    let err = run::sandbox_forward(&server.endpoint, "forward-repro", &spec, true, &tls)
+        .await
+        .expect_err(
+            "background forward should fail when ssh exits successfully but no background process or local listener exists",
+        );
+
+    let text = format!("{err:?}");
+    assert!(
+        text.contains("Could not discover") || text.contains("listener"),
+        "unexpected error: {text}",
     );
 }

@@ -8,9 +8,10 @@
 
 use crate::paths::{create_dir_restricted, xdg_config_dir};
 use miette::{IntoDiagnostic, Result, WrapErr};
-use std::net::TcpListener;
+use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::process::Command;
+use std::time::Duration;
 
 // ---------------------------------------------------------------------------
 // Forward PID file management
@@ -423,6 +424,40 @@ fn lsof_listeners(port: u16) -> Option<String> {
     } else {
         Some(stdout)
     }
+}
+
+// ---------------------------------------------------------------------------
+// Listener probe
+// ---------------------------------------------------------------------------
+
+/// Maximum number of TCP connect attempts when probing a local listener.
+const LISTENER_PROBE_MAX_ATTEMPTS: u32 = 10;
+
+/// Delay between TCP connect probe attempts.
+const LISTENER_PROBE_INTERVAL: Duration = Duration::from_millis(100);
+
+/// Probe the local listener on `bind_addr:port` by attempting a TCP connect.
+///
+/// Retries up to [`LISTENER_PROBE_MAX_ATTEMPTS`] times with a short delay
+/// between attempts to allow the SSH tunnel time to set up the listener.
+/// Returns `true` if the listener is reachable, `false` otherwise.
+pub fn probe_listener(bind_addr: &str, port: u16) -> bool {
+    for _ in 0..LISTENER_PROBE_MAX_ATTEMPTS {
+        if TcpStream::connect((bind_addr, port)).is_ok() {
+            return true;
+        }
+        std::thread::sleep(LISTENER_PROBE_INTERVAL);
+    }
+    false
+}
+
+/// Kill a process by PID. Best-effort; errors are silently ignored.
+pub fn kill_process(pid: u32) {
+    let _ = Command::new("kill")
+        .arg(pid.to_string())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
 }
 
 // ---------------------------------------------------------------------------
